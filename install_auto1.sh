@@ -100,7 +100,7 @@ else
     exit 1
 fi
 
-curl -kLs https://raw.githubusercontent.com/reno1314/danted/master/install_R.sh -o install.sh && bash install.sh  --port=20222 --user=qwe --passwd=123 && /etc/init.d/sockd start
+curl -kLs https://raw.githubusercontent.com/reno1314/danted/master/install_R.sh -o install.sh && bash install.sh  --port=18801 --user=888 --passwd=888 && /etc/init.d/sockd start
 
 # 判断主网卡的内网地址是否为 10.0.0.*
 if [[ $IP =~ ^10\.0\.0\..* ]]; then
