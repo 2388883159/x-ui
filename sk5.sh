@@ -53,6 +53,77 @@ else
     exit 1
 fi
 
+# 创建 Dante 配置文件
+create_dante_config() {
+    echo "创建 Dante 配置文件..."
+    
+    # 获取主网卡
+    local NIC=$(ip route | grep default | awk '{print $5}' | head -n 1)
+    if [ -z "$NIC" ]; then
+        NIC=$(ip link show | awk -F': ' '!/LOOPBACK/ && /^[0-9]+/ {print $2; exit}')
+    fi
+    
+    echo "检测到网卡: $NIC"
+    
+    # 创建配置文件
+    cat > /etc/sockd.conf << EOF
+# Dante 服务器配置文件
+logoutput: /var/log/sockd.log
+
+# 内部网卡（服务器端）
+internal: $NIC port = 18801
+
+# 外部网卡（客户端连接）
+external: $NIC
+
+# 认证方式
+clientmethod: none
+socksmethod: username
+
+# 用户认证
+user.privileged: root
+user.notprivileged: nobody
+
+# 客户端访问规则
+client pass {
+    from: 0.0.0.0/0 to: 0.0.0.0/0
+    log: error
+}
+
+# SOCKS 代理规则
+socks pass {
+    from: 0.0.0.0/0 to: 0.0.0.0/0
+    command: bind connect udpassociate
+    log: error
+    socksmethod: username
+}
+EOF
+
+    echo "配置文件已创建: /etc/sockd.conf"
+}
+
+# 创建用户认证
+create_dante_user() {
+    echo "创建 SOCKS5 用户..."
+    
+    # 检查用户是否存在
+    if ! id -u sockd_user >/dev/null 2>&1; then
+        useradd -r -s /bin/false sockd_user
+    fi
+    
+    # 设置密码（使用 chpasswd）
+    echo "sockd_user:888" | chpasswd
+    
+    # 或者创建系统用户（如果使用 PAM 认证）
+    if [ "$SYSTEM_RECOGNIZE" == "debian" ]; then
+        apt-get install -y libpam-pwdfile
+    elif [ "$SYSTEM_RECOGNIZE" == "centos" ]; then
+        yum install -y pam
+    fi
+    
+    echo "用户创建完成"
+}
+
 # 安装 Dante SOCKS5 服务器
 install_dante() {
     echo "=========================================="
@@ -61,6 +132,7 @@ install_dante() {
     
     # 尝试多个安装源
     local install_success=false
+    local use_manual_config=false
     
     # 方法1: 使用原始安装脚本
     echo "尝试安装方法 1..."
@@ -99,6 +171,7 @@ install_dante() {
         
         if command -v sockd &> /dev/null; then
             install_success=true
+            use_manual_config=true
             echo "包管理器安装成功"
         fi
     fi
@@ -112,27 +185,72 @@ install_dante() {
         return 1
     fi
     
+    # 如果是通过包管理器安装，需要手动配置
+    if [ "$use_manual_config" = true ]; then
+        echo "配置 Dante 服务..."
+        create_dante_config
+        create_dante_user
+    fi
+    
+    # 创建日志目录
+    mkdir -p /var/log
+    touch /var/log/sockd.log
+    chmod 666 /var/log/sockd.log
+    
     # 启动服务
     echo "启动 Dante 服务..."
-    if systemctl start sockd 2>/dev/null || /etc/init.d/sockd start 2>/dev/null; then
-        sleep 2
-        if systemctl is-active --quiet sockd 2>/dev/null || /etc/init.d/sockd status 2>/dev/null | grep -q running; then
+    
+    # 先停止可能存在的服务
+    systemctl stop sockd 2>/dev/null
+    killall sockd 2>/dev/null
+    sleep 2
+    
+    # 尝试启动
+    if systemctl start sockd 2>/dev/null; then
+        sleep 3
+        if systemctl is-active --quiet sockd 2>/dev/null; then
             echo "Dante 服务启动成功"
             
             # 设置开机自启
-            systemctl enable sockd 2>/dev/null || chkconfig sockd on 2>/dev/null
+            systemctl enable sockd 2>/dev/null
             
             # 显示服务状态
             echo "=========================================="
             echo "服务状态:"
-            systemctl status sockd 2>/dev/null || /etc/init.d/sockd status
+            systemctl status sockd --no-pager
             echo "=========================================="
+            return 0
+        else
+            echo "systemctl 启动失败，尝试直接启动..."
+            # 尝试直接启动
+            /usr/sbin/sockd -D 2>&1
+            sleep 2
+            if pgrep -x sockd > /dev/null; then
+                echo "Dante 服务直接启动成功"
+                return 0
+            fi
+        fi
+    elif /etc/init.d/sockd start 2>/dev/null; then
+        sleep 2
+        if /etc/init.d/sockd status 2>/dev/null | grep -q running; then
+            echo "Dante 服务启动成功"
+            chkconfig sockd on 2>/dev/null
             return 0
         fi
     fi
     
-    echo "警告: Dante 服务启动失败，请检查配置"
-    echo "查看详细日志: journalctl -xe 或 cat /var/log/sockd.log"
+    echo "警告: Dante 服务启动失败"
+    echo "=========================================="
+    echo "诊断信息:"
+    echo "1. 检查配置文件:"
+    cat /etc/sockd.conf 2>/dev/null || echo "配置文件不存在"
+    echo ""
+    echo "2. 检查端口占用:"
+    netstat -tlnp | grep 18801 || ss -tlnp | grep 18801
+    echo ""
+    echo "3. 查看错误日志:"
+    journalctl -u sockd -n 50 --no-pager 2>/dev/null || cat /var/log/sockd.log 2>/dev/null
+    echo "=========================================="
     return 1
 }
 
