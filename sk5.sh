@@ -71,7 +71,7 @@ create_dante_config() {
 logoutput: /var/log/sockd.log
 
 # 内部网卡（服务器端）
-internal: $NIC port = 18801
+internal: $NIC port = 18888
 
 # 外部网卡（客户端连接）
 external: $NIC
@@ -112,7 +112,7 @@ create_dante_user() {
     fi
     
     # 设置密码（使用 chpasswd）
-    echo "sockd_user:888" | chpasswd
+    echo "sockd_user:1988" | chpasswd
     
     # 或者创建系统用户（如果使用 PAM 认证）
     if [ "$SYSTEM_RECOGNIZE" == "debian" ]; then
@@ -246,7 +246,7 @@ install_dante() {
     cat /etc/sockd.conf 2>/dev/null || echo "配置文件不存在"
     echo ""
     echo "2. 检查端口占用:"
-    netstat -tlnp | grep 18801 || ss -tlnp | grep 18801
+    netstat -tlnp | grep 18888 || ss -tlnp | grep 18888
     echo ""
     echo "3. 查看错误日志:"
     journalctl -u sockd -n 50 --no-pager 2>/dev/null || cat /var/log/sockd.log 2>/dev/null
